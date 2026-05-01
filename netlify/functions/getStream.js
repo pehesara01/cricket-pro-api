@@ -2,7 +2,6 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 exports.handler = async function(event, context) {
-    // මේ ලින්ක් එක අර ප්ලේයර් එක තියෙන intermediate පේජ් එකයි (මීට වඩා ස්ථාවරයි)
     const initialUrl = 'https://streamcrichd.com/update/skys2.php'; 
 
     const headers = {
@@ -16,36 +15,51 @@ exports.handler = async function(event, context) {
         return { statusCode: 200, headers, body: "" };
     }
 
+    // සාමාන්‍ය Browser එකක් ලෙස පෙන්වීමට අවශ්‍ය සම්පූර්ණ Headers
+    const fakeBrowserHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'cross-site',
+        'Cache-Control': 'max-age=0'
+    };
+
     try {
-        // පියවර 1: Intermediate page එකට Request එකක් යවනවා
-        const res1 = await axios.get(initialUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Referer': 'https://vf.crichd.tv/'
-            }
-        });
+        let res1;
+        try {
+            // පියවර 1: Intermediate page එකට Request එක යැවීම
+            res1 = await axios.get(initialUrl, {
+                headers: { ...fakeBrowserHeaders, 'Referer': 'https://vf.crichd.tv/' },
+                timeout: 8000
+            });
+        } catch (e) {
+            throw new Error("Step 1 (Initial Page) Failed: " + e.message);
+        }
 
         const $ = cheerio.load(res1.data);
-        
-        // පියවර 2: Page එක ඇතුළේ තියෙන ප්ලේයර් Iframe එකේ ලින්ක් එක (src) ගන්නවා
         let playerUrl = $('iframe').attr('src');
 
         if (!playerUrl) {
              throw new Error("Could not find the player iframe source in intermediate page.");
         }
 
-        // ලින්ක් එක පටන් ගන්නේ // නම් ඒකට https: එකතු කරනවා
         if (playerUrl.startsWith('//')) {
             playerUrl = `https:${playerUrl}`;
         }
 
-        // පියවර 3: දැන් ඒ හොයාගත්ත අලුත්ම ප්ලේයර් ලින්ක් එකට ගිහින් m3u8 එක හොයනවා
-        const res2 = await axios.get(playerUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Referer': initialUrl
-            }
-        });
+        let res2;
+        try {
+            // පියවර 2: Player page එකට Request එක යැවීම
+            res2 = await axios.get(playerUrl, {
+                headers: { ...fakeBrowserHeaders, 'Referer': initialUrl },
+                timeout: 8000
+            });
+        } catch (e) {
+            throw new Error("Step 2 (Player Page) Failed: " + e.message);
+        }
 
         const html = res2.data;
         const m3u8Regex = /(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/;
@@ -69,9 +83,9 @@ exports.handler = async function(event, context) {
 
     } catch (error) {
         return {
-            statusCode: 200,
+            statusCode: 200, 
             headers: headers,
-            body: JSON.stringify({ success: false, message: "Scraper Error: " + error.message })
+            body: JSON.stringify({ success: false, message: error.message })
         };
     }
 };
