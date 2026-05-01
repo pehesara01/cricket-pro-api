@@ -2,10 +2,9 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 exports.handler = async function(event, context) {
-    // Screenshot එකේ තිබුණු අන්තිම Iframe ලින්ක් එක කෙළින්ම මෙතනට දුන්නා
-    const targetUrl = 'https://executeandship.com/premiumgr.php?player=desktop&live=skyscric'; 
+    // මේ ලින්ක් එක අර ප්ලේයර් එක තියෙන intermediate පේජ් එකයි (මීට වඩා ස්ථාවරයි)
+    const initialUrl = 'https://streamcrichd.com/update/skys2.php'; 
 
-    // Blogger එකේ CORS Error එන එක වළක්වන්න අත්‍යවශ්‍ය Headers
     const headers = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": "Content-Type",
@@ -13,51 +12,64 @@ exports.handler = async function(event, context) {
         "Content-Type": "application/json"
     };
 
-    // Pre-flight request (OPTIONS) සඳහා Response එක
     if (event.httpMethod === "OPTIONS") {
         return { statusCode: 200, headers, body: "" };
     }
 
     try {
-        // Target URL එකට Request එක යැවීම
-        const response = await axios.get(targetUrl, {
+        // පියවර 1: Intermediate page එකට Request එකක් යවනවා
+        const res1 = await axios.get(initialUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                // සර්වර් එකෙන් ලින්ක් එක ගන්න නම් මේ Referer එක අනිවාර්යයෙන්ම තියෙන්න ඕනේ
-                'Referer': 'https://streamcrichd.com/',
-                'Origin': 'https://streamcrichd.com'
-            },
-            timeout: 10000 // තත්පර 10කින් Response එකක් ආවේ නැත්නම් නවත්වනවා
+                'Referer': 'https://vf.crichd.tv/'
+            }
         });
 
-        const html = response.data;
+        const $ = cheerio.load(res1.data);
         
-        // md5 සහ expires කියන Dynamic Tokens එක්කම m3u8 ලින්ක් එක ගන්න පුළුවන් Regex එකක්
+        // පියවර 2: Page එක ඇතුළේ තියෙන ප්ලේයර් Iframe එකේ ලින්ක් එක (src) ගන්නවා
+        let playerUrl = $('iframe').attr('src');
+
+        if (!playerUrl) {
+             throw new Error("Could not find the player iframe source in intermediate page.");
+        }
+
+        // ලින්ක් එක පටන් ගන්නේ // නම් ඒකට https: එකතු කරනවා
+        if (playerUrl.startsWith('//')) {
+            playerUrl = `https:${playerUrl}`;
+        }
+
+        // පියවර 3: දැන් ඒ හොයාගත්ත අලුත්ම ප්ලේයර් ලින්ක් එකට ගිහින් m3u8 එක හොයනවා
+        const res2 = await axios.get(playerUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Referer': initialUrl
+            }
+        });
+
+        const html = res2.data;
         const m3u8Regex = /(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/;
         const match = html.match(m3u8Regex);
 
         let streamLink = (match && match[1]) ? match[1] : null;
 
         if (streamLink) {
-            // ලින්ක් එක සාර්ථකව හොයාගත්තා නම්
             return {
                 statusCode: 200,
                 headers: headers,
                 body: JSON.stringify({ success: true, url: streamLink })
             };
         } else {
-            // HTML එක ඇතුළේ ලින්ක් එක නැත්නම්
             return {
                 statusCode: 200, 
                 headers: headers,
-                body: JSON.stringify({ success: false, message: "Stream link not found in the source player" })
+                body: JSON.stringify({ success: false, message: "M3U8 link not found in final source" })
             };
         }
 
     } catch (error) {
-        // සර්වර් එකේ මොකක් හරි දෝෂයක් ආවොත්
         return {
-            statusCode: 200, // Client side ප්ලේයර් එක crash වෙන එක නවත්වන්න 200 යවනවා
+            statusCode: 200,
             headers: headers,
             body: JSON.stringify({ success: false, message: "Scraper Error: " + error.message })
         };
